@@ -63,10 +63,11 @@ prompt_template = PromptTemplate(
     template="""
 Ты — дружелюбный и внимательный консультант кафе-кондитерской Hani.
 
-Всегда начинай диалог с приветствия. Если пользователь впервые обращается — представься. 
-Затем вежливо отвечай на его вопрос, используя только предоставленный контекст. 
-Если пользователь хочет сделать заказ, узнай адрес или город, предложи ближайшую точку для самовывоза (если есть). 
-После подтверждения — уточни, какой именно товар интересует, и дай подробную информацию (состав, цена, вес, наличие).
+Если история диалога пуста, поприветствуй клиента и кратко представься.
+Затем вежливо отвечай на его вопрос, используя только предоставленный контекст.
+Если пользователь хочет сделать заказ, узнай, будет ли самовывоз или доставка, и попроси адрес или город.
+Предложи ближайшую точку для самовывоза, если она есть.
+После подтверждения уточни, какой именно товар интересует, и дай подробную информацию (состав, цена, вес, наличие).
 Если нет информации — честно скажи, что не знаешь.
 
 История диалога:
@@ -181,6 +182,25 @@ def get_product_stock(meta_href: str, api_key: str) -> str:
         logger.error(f"Ошибка запроса: {str(e)}")
         return f"⚠️ Ошибка при проверке наличия: {str(e)}"
 
+def respond_with_delivery_info(address: str) -> None:
+    """Выводит стоимость доставки и ближайшую точку самовывоза."""
+    try:
+        order_sum = int(input("Введите сумму заказа (₸): "))
+    except Exception:
+        order_sum = 0
+    delivery_msg = get_delivery_price(address, order_sum)
+    print("Бот:", delivery_msg)
+    coords = geocode_address_2gis(address)
+    if coords:
+        nearest, dist = find_nearest_pickup(coords, pickup_points)
+        print(
+            f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
+        )
+    else:
+        print(
+            "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
+        )
+
 print("Консультант Hani готов к диалогу. Напишите вопрос или 'выход':")
 logger.info("Бот запущен и готов к работе")
 
@@ -188,32 +208,44 @@ current_selection = None
 last_product_query = None
 user_address = None
 order_sum = 0
+awaiting_delivery_choice = False
+awaiting_address = False
 
 clarifying_phrases = [
     'есть в наличии', 'есть?', 'можно забрать?', 'доступен?', 'самовывоз',
     'где забрать', 'а есть', 'есть ли в наличии', 'наличие?', 'где взять',
-    'забрать', 'на точке', 'на какой точке', 'доступен для самовывоза', 'точка'
+    'забрать', 'на точке', 'на какой точке', 'доступен для самовывоза', 'точка',
+    'доставка', 'с доставкой'
 ]
 
 while True:
     q = input("Вы: ").strip()
     logger.info(f"Получен вопрос: '{q}'")
 
+    if awaiting_address:
+        user_address = q
+        respond_with_delivery_info(user_address)
+        awaiting_address = False
+        continue
+
+    if awaiting_delivery_choice:
+        if "самовывоз" in q.lower() or "забрать" in q.lower():
+            print(
+                "Бот: Укажите город или адрес, чтобы подсказать ближайшую точку самовывоза."
+            )
+            awaiting_delivery_choice = False
+            awaiting_address = True
+            continue
+        else:
+            user_address = q
+            respond_with_delivery_info(user_address)
+            awaiting_delivery_choice = False
+            continue
+
     # --- Определяем стоимость доставки, ближайшую точку по адресу или району ---
     if any(word in q.lower() for word in ["город", "адрес", "нахожусь", "я из", "район", "доставка"]):
         user_address = q
-        try:
-            order_sum = int(input("Введите сумму заказа (₸): "))
-        except Exception:
-            order_sum = 0
-        delivery_msg = get_delivery_price(user_address, order_sum)
-        print("Бот:", delivery_msg)
-        coords = geocode_address_2gis(user_address)
-        if coords:
-            nearest, dist = find_nearest_pickup(coords, pickup_points)
-            print(f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км.")
-        else:
-            print("Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее.")
+        respond_with_delivery_info(user_address)
         continue
 
     # --- Товарный выбор и остальное ---
@@ -231,6 +263,11 @@ while True:
             logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
             stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
             print("Бот:", stock_info)
+            if "нет в наличии" not in stock_info.lower():
+                print(
+                    "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
+                )
+                awaiting_delivery_choice = True
             last_product_query = selected_product.lower()
             current_selection = None
             continue
@@ -282,6 +319,11 @@ while True:
         logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
         stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
         print("Бот:", stock_info)
+        if "нет в наличии" not in stock_info.lower():
+            print(
+                "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
+            )
+            awaiting_delivery_choice = True
         last_product_query = product_name
 
     else:
