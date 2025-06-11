@@ -31,6 +31,7 @@ all_product_names = products_df["Название"].str.lower().tolist()
 order = []
 pending_product = None
 awaiting_quantity = False
+awaiting_finalize = False
 
 # --- Самовывоз точки (сделай lat/lon если захочешь ускорить работу) ---
 pickup_points = [
@@ -263,11 +264,21 @@ while True:
             print(f"Бот: Добавлено {pending_product['name']} x{qty} в заказ.")
             pending_product = None
             awaiting_quantity = False
-            print("Бот: Хотите выбрать что-то ещё? Если закончили, напишите 'самовывоз' или укажите адрес доставки.")
-            awaiting_delivery_choice = True
+            print("Бот: Если хотите добавить ещё товары, напишите их название. Когда закончите, напишите 'оформить заказ'.")
+            awaiting_finalize = True
         else:
             print("Бот: Пожалуйста, укажите количество цифрой.")
         continue
+
+    if awaiting_finalize:
+        if q.lower() in ["оформить заказ", "оформить", "завершить", "конец", "нет"]:
+            summarize_order()
+            print("Бот: Укажите 'самовывоз' или адрес доставки для оформления.")
+            awaiting_finalize = False
+            awaiting_delivery_choice = True
+            continue
+        else:
+            awaiting_finalize = False
 
     if awaiting_delivery_choice:
         if "самовывоз" in q.lower() or "забрать" in q.lower():
