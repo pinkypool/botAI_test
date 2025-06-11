@@ -213,12 +213,12 @@ def summarize_order() -> int:
     if not order:
         print("Бот: Заказ пуст.")
         return total
-    print("Бот: Ваш заказ:")
+    print("Бот: Ваш заказ 🛍:")
     for item in order:
         subtotal = item["price"] * item["quantity"]
         total += subtotal
         print(f" - {item['name']} x{item['quantity']} = {subtotal} ₸")
-    print(f"Итого: {total} ₸")
+    print(f"Итого: {total} ₸ 🎉")
     return total
 
 def respond_with_delivery_info(address: str, order_total: int, available_names=None) -> None:
@@ -272,10 +272,10 @@ while True:
         if q.isdigit():
             qty = int(q)
             order.append({"name": pending_product["name"], "price": pending_product["price"], "quantity": qty})
-            print(f"Бот: Добавлено {pending_product['name']} x{qty} в заказ.")
+            print(f"Бот: Добавлено {pending_product['name']} x{qty} в заказ 😊")
             pending_product = None
             awaiting_quantity = False
-            print("Бот: Если хотите добавить ещё товары, напишите их название. Когда закончите, напишите 'оформить заказ'.")
+            print("Бот: Хотите что-то ещё? Напишите название товара или 'оформить заказ' 😉")
             awaiting_finalize = True
         else:
             print("Бот: Пожалуйста, укажите количество цифрой.")
@@ -284,7 +284,7 @@ while True:
     if awaiting_finalize:
         if q.lower() in ["оформить заказ", "оформить", "завершить", "конец", "нет"]:
             summarize_order()
-            print("Бот: Укажите 'самовывоз' или адрес доставки для оформления.")
+            print("Бот: Доставка или самовывоз? 🚚")
             awaiting_finalize = False
             awaiting_delivery_choice = True
             continue
@@ -293,10 +293,14 @@ while True:
 
     if awaiting_delivery_choice:
         if "самовывоз" in q.lower() or "забрать" in q.lower():
-            summarize_order()
             print(
-                "Бот: Укажите город или адрес, чтобы подсказать ближайшую точку самовывоза."
+                "Бот: Укажите город или адрес, чтобы подсказать ближайшую точку самовывоза 😊."
             )
+            awaiting_delivery_choice = False
+            awaiting_address = True
+            continue
+        elif q.lower().strip() == "доставка":
+            print("Бот: Пожалуйста, укажите адрес доставки 🏠.")
             awaiting_delivery_choice = False
             awaiting_address = True
             continue
