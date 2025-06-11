@@ -1,9 +1,88 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/rag_bot.py b/rag_bot.py
-index e478651aea361ca6be56a6e28ce74984906f74ba..c5454820c2ed64475d51004224d3521cf4ffb975 100644
+index c5454820c2ed64475d51004224d3521cf4ffb975..f8df6a60ed44845d38d8dac9a3d2e91ed09dd96f 100644
 --- a/rag_bot.py
 +++ b/rag_bot.py
-@@ -176,93 +176,73 @@ def get_product_stock(meta_href: str, api_key: str) -> str:
+@@ -1,55 +1,58 @@
+ from langchain_community.vectorstores import Chroma
+ from langchain_community.embeddings import HuggingFaceEmbeddings
+ from langchain_community.llms import Ollama
+ from langchain.chains import ConversationalRetrievalChain
+ from langchain.memory import ConversationBufferMemory
+ from langchain.prompts import PromptTemplate
+ import requests
+ import pandas as pd
+ import logging
+ import re
++import glob
+ from difflib import get_close_matches
+ from geopy.distance import geodesic
+ 
+ # --- Логирование ---
+ logging.basicConfig(
+     level=logging.INFO,
+     format='%(asctime)s - %(levelname)s - %(message)s',
+     handlers=[logging.FileHandler('bot.log'), logging.StreamHandler()]
+ )
+ logger = logging.getLogger(__name__)
+ 
+ # --- Конфиги ---
+ MOYSKLAD_API_KEY = "437b4e11276436c76fa225094a7ff48c25e5bc77"
+ DGIS_API_KEY = "7c52ad61-fb25-4272-98c9-557a0038ec6c"
+ FREE_DELIVERY_SUM = 10000
+ 
+ products_df = pd.read_excel("product_id.xlsx")
+ all_product_names = products_df["Название"].str.lower().tolist()
+ 
+ order = []
++pending_product = None
++awaiting_quantity = False
+ 
+ # --- Самовывоз точки (сделай lat/lon если захочешь ускорить работу) ---
+ pickup_points = [
+     {"city": "Караганда", "name": "Hani, Таттимбета 105",  "address": "Караганда, ул. Таттимбета 105"},
+     {"city": "Караганда", "name": "Hani, Шахтеров 52",     "address": "Караганда, ул. Шахтеров 52"},
+     {"city": "Караганда", "name": "Hani, ТЦ Глобал Сити",  "address": "Караганда, ТЦ Глобал Сити"},
+     {"city": "Караганда", "name": "Hani, ТЦ Таир",         "address": "Караганда, ТЦ Таир"},
+     {"city": "Караганда", "name": "Hani, Бухар Жырау 41",  "address": "Караганда, пр. Бухар Жырау 41"},
+     {"city": "Караганда", "name": "Hani, Абдирова 172",    "address": "Караганда, ул. Абдирова 172"},
+     {"city": "Караганда", "name": "Hani, Гоголя 68",       "address": "Караганда, ул. Гоголя 68"},
+     {"city": "Караганда", "name": "Hani, Чкалова 2",       "address": "Караганда, ул. Чкалова 2"},
+     {"city": "Караганда", "name": "Hani, Назарбаева 3",    "address": "Караганда, пр. Назарбаева 3"},
+     {"city": "Темиртау",  "name": "Hani, пр. Мира 712",    "address": "Темиртау, пр. Мира 712"},
+     {"city": "Темиртау",  "name": "Hani, Республики 86",   "address": "Темиртау, ул. Республики 86"},
+     {"city": "Темиртау",  "name": "Hani, микрорайон 43а",  "address": "Темиртау, микрорайон 43а"},
+     {"city": "Астана",    "name": "Hani, Туркестан 20",    "address": "Астана, ул. Туркестан 20"},
+     {"city": "Астана",    "name": "Hani, Туркестан 28",    "address": "Астана, ул. Туркестан 28"},
+     {"city": "Астана",    "name": "Hani, Иманбаева 7а",    "address": "Астана, ул. Иманбаева 7а"},
+     {"city": "Астана",    "name": "Hani, Мангилик ел 45а", "address": "Астана, пр. Мангилик ел 45а"},
+     {"city": "Астана",    "name": "Hani, Тауелсиздик 39",  "address": "Астана, пр. Тауелсиздик 39"},
+ ]
+ 
+ delivery_zones = {
+     "город": 500, "юго-восток": 500, "михайловка": 500, "за церковью": 1000,
+     "федоровка": 500, "после пожарной части": 1000, "майкудук до тд умай": 1000,
+diff --git a/rag_bot.py b/rag_bot.py
+index c5454820c2ed64475d51004224d3521cf4ffb975..f8df6a60ed44845d38d8dac9a3d2e91ed09dd96f 100644
+--- a/rag_bot.py
++++ b/rag_bot.py
+@@ -160,150 +163,178 @@ def extract_product_name(query: str) -> str:
+                 'сколько', 'осталось', 'наличие', 'на', 'точке',
+                 'можно', 'забрать', 'какое', 'количество', 'в', 'самовывоз', 'доставка'}
+     words = [word for word in re.findall(r'\w+', query.lower()) if word not in stop_words]
+     return ' '.join(words)
+ 
+ def get_product_stock(meta_href: str, api_key: str) -> str:
+     url = f"https://api.moysklad.ru/api/remap/1.2/report/stock/bystore?filter=product={meta_href}"
+     headers = {"Authorization": f"Bearer {api_key}", "Accept-Encoding": "gzip", "Content-Type": "application/json"}
+     try:
+         response = requests.get(url, headers=headers)
+         response.raise_for_status()
+         data = response.json()
+         rows = data.get("rows", [])
+         stocks = []
+         for item in rows:
+             for store in item.get("stockByStore", []):
                  if store.get("stock", 0) > 0:
                      store_name = store.get("name", "Неизвестный склад")
                      stocks.append(f"• {store_name}: {int(store['stock'])} шт.")
@@ -13,6 +92,18 @@ index e478651aea361ca6be56a6e28ce74984906f74ba..c5454820c2ed64475d51004224d3521c
      except requests.exceptions.RequestException as e:
          logger.error(f"Ошибка запроса: {str(e)}")
          return f"⚠️ Ошибка при проверке наличия: {str(e)}"
++
++def get_product_price(product_name: str) -> int:
++    """Ищет цену товара в текстовых меню и возвращает её."""
++    price_pattern = re.compile(r"Цена:\s*(\d+)")
++    for path in glob.glob("rag_knowledge_base/menu_*.txt"):
++        with open(path, encoding="utf-8") as f:
++            for line in f:
++                if product_name.lower() in line.lower():
++                    m = price_pattern.search(line)
++                    if m:
++                        return int(m.group(1))
++    return 0
      
  # --- Работа с заказом ---
  def summarize_order() -> int:
@@ -29,31 +120,12 @@ index e478651aea361ca6be56a6e28ce74984906f74ba..c5454820c2ed64475d51004224d3521c
      print(f"Итого: {total} ₸")
      return total
  
--def respond_with_delivery_info(address: str, order_total: int):
--    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
--    delivery_msg = get_delivery_price(address, order_total)
--    print("Бот:", delivery_msg)
--    coords = geocode_address_2gis(address)
--    if coords:
--        nearest, dist = find_nearest_pickup(coords, pickup_points)
--        print(
--            f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
--        )
--    else:
--        print(
--            "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
--        )
--
--
- def respond_with_delivery_info(address: str) -> None:
--    """Выводит стоимость доставки и ближайшую точку самовывоза."""
--    try:
--        order_sum = int(input("Введите сумму заказа (₸): "))
--    except Exception:
--        order_sum = 0
-+    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
-+    order_sum = summarize_order()
-     delivery_msg = get_delivery_price(address, order_sum)
+-def respond_with_delivery_info(address: str) -> None:
++def respond_with_delivery_info(address: str, order_total: int) -> None:
+     """Сообщает стоимость доставки и ближайшую точку самовывоза."""
+-    order_sum = summarize_order()
+-    delivery_msg = get_delivery_price(address, order_sum)
++    delivery_msg = get_delivery_price(address, order_total)
      print("Бот:", delivery_msg)
      coords = geocode_address_2gis(address)
      if coords:
@@ -73,7 +145,6 @@ index e478651aea361ca6be56a6e28ce74984906f74ba..c5454820c2ed64475d51004224d3521c
  current_selection = None
  last_product_query = None
  user_address = None
--order_sum = 0
  awaiting_delivery_choice = False
  awaiting_address = False
  
@@ -90,15 +161,144 @@ index e478651aea361ca6be56a6e28ce74984906f74ba..c5454820c2ed64475d51004224d3521c
  
      if awaiting_address:
          user_address = q
-         respond_with_delivery_info(user_address)
+-        respond_with_delivery_info(user_address)
++        total = summarize_order()
++        respond_with_delivery_info(user_address, total)
          awaiting_address = False
          continue
  
++    if awaiting_quantity:
++        if q.isdigit():
++            qty = int(q)
++            order.append({"name": pending_product["name"], "price": pending_product["price"], "quantity": qty})
++            print(f"Бот: Добавлено {pending_product['name']} x{qty} в заказ.")
++            pending_product = None
++            awaiting_quantity = False
++            print("Бот: Хотите выбрать что-то ещё? Если закончили, напишите 'самовывоз' или укажите адрес доставки.")
++            awaiting_delivery_choice = True
++        else:
++            print("Бот: Пожалуйста, укажите количество цифрой.")
++        continue
++
      if awaiting_delivery_choice:
          if "самовывоз" in q.lower() or "забрать" in q.lower():
++            summarize_order()
              print(
                  "Бот: Укажите город или адрес, чтобы подсказать ближайшую точку самовывоза."
              )
+             awaiting_delivery_choice = False
+             awaiting_address = True
+             continue
+         else:
+             user_address = q
+-            respond_with_delivery_info(user_address)
++            total = summarize_order()
++            respond_with_delivery_info(user_address, total)
+             awaiting_delivery_choice = False
+             continue
+ 
+ 
+     # --- Определяем стоимость доставки, ближайшую точку по адресу или району ---
+     if any(word in q.lower() for word in ["город", "адрес", "нахожусь", "я из", "район", "доставка"]):
+         user_address = q
+-        respond_with_delivery_info(user_address)
++        total = summarize_order()
++        respond_with_delivery_info(user_address, total)
+         continue
+ 
+     # --- Товарный выбор и остальное ---
+     if q.lower() in ["выход", "exit", "quit"]:
+         logger.info("Завершение работы по команде пользователя")
+         print("До свидания!")
+         break
+ 
+     if current_selection and q.isdigit():
+         choice = int(q)
+         if 1 <= choice <= len(current_selection):
+             selected_product = current_selection[choice-1]
+             product_row = products_df[products_df["Название"] == selected_product].iloc[0]
+             meta_href = product_row["Meta Href"]
+             logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
+             stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
+             print("Бот:", stock_info)
+             if "нет в наличии" not in stock_info.lower():
+-                print(
+-                    "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
+-                )
+-                awaiting_delivery_choice = True
++                price = get_product_price(product_row["Название"])
++                pending_product = {"name": product_row["Название"], "price": price}
++                print("Бот: Сколько штук добавить в заказ?")
++                awaiting_quantity = True
+             last_product_query = selected_product.lower()
+             current_selection = None
+             continue
+         else:
+             print("Бот: Пожалуйста, укажите номер из предложенных вариантов.")
+             continue
+ 
+     if current_selection:
+         print("Бот: Пожалуйста, укажите номер товара или задайте новый вопрос.")
+         continue
+ 
+     if detect_stock_question(q):
+         query_words = extract_product_name(q).split()
+         if (
+             (len(query_words) <= 2 and last_product_query)
+             or any(phrase in q.lower() for phrase in clarifying_phrases)
+         ):
+             product_query = last_product_query if last_product_query else extract_product_name(q)
+         else:
+             product_query = extract_product_name(q)
+             last_product_query = product_query
+ 
+         logger.info(f"Извлечен запрос товара: '{product_query}'")
+         if not product_query:
+             print("Бот: Сначала уточните, какой товар вас интересует.")
+diff --git a/rag_bot.py b/rag_bot.py
+index c5454820c2ed64475d51004224d3521cf4ffb975..f8df6a60ed44845d38d8dac9a3d2e91ed09dd96f 100644
+--- a/rag_bot.py
++++ b/rag_bot.py
+@@ -312,35 +343,35 @@ while True:
+         similar_products = find_similar_products(product_query, all_product_names)
+         if not similar_products:
+             print("Бот: Товар не найден в ассортименте.")
+             continue
+ 
+         if len(similar_products) > 1:
+             original_names = []
+             for name in similar_products:
+                 original_name = products_df[products_df["Название"].str.lower() == name].iloc[0]["Название"]
+                 original_names.append(original_name)
+ 
+             print("Бот: Уточните, какой именно товар вас интересует:")
+             for i, name in enumerate(original_names, 1):
+                 print(f"{i}. {name}")
+             print("Пожалуйста, укажите номер товара.")
+             current_selection = original_names
+             continue
+ 
+         product_name = similar_products[0]
+         product_row = products_df[products_df["Название"].str.lower() == product_name].iloc[0]
+         meta_href = product_row["Meta Href"]
+         logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
+         stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
+         print("Бот:", stock_info)
+         if "нет в наличии" not in stock_info.lower():
+-            print(
+-                "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
+-            )
+-            awaiting_delivery_choice = True
++            price = get_product_price(product_row["Название"])
++            pending_product = {"name": product_row["Название"], "price": price}
++            print("Бот: Сколько штук добавить в заказ?")
++            awaiting_quantity = True
+         last_product_query = product_name
+ 
+     else:
+         logger.info("Вопрос не про наличие - обращение к YandexGPT")
+         result = qa.run(q)
+         print("Бот:", result)
  
 EOF
 )

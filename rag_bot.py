@@ -8,6 +8,7 @@ import requests
 import pandas as pd
 import logging
 import re
+import glob
 from difflib import get_close_matches
 from geopy.distance import geodesic
 
@@ -28,6 +29,8 @@ products_df = pd.read_excel("product_id.xlsx")
 all_product_names = products_df["Название"].str.lower().tolist()
 
 order = []
+pending_product = None
+awaiting_quantity = False
 
 # --- Самовывоз точки (сделай lat/lon если захочешь ускорить работу) ---
 pickup_points = [
@@ -182,6 +185,18 @@ def get_product_stock(meta_href: str, api_key: str) -> str:
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка запроса: {str(e)}")
         return f"⚠️ Ошибка при проверке наличия: {str(e)}"
+
+def get_product_price(product_name: str) -> int:
+    """Ищет цену товара в текстовых меню и возвращает её."""
+    price_pattern = re.compile(r"Цена:\s*(\d+)")
+    for path in glob.glob("rag_knowledge_base/menu_*.txt"):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if product_name.lower() in line.lower():
+                    m = price_pattern.search(line)
+                    if m:
+                        return int(m.group(1))
+    return 0
     
 # --- Работа с заказом ---
 def summarize_order() -> int:
@@ -198,10 +213,9 @@ def summarize_order() -> int:
     print(f"Итого: {total} ₸")
     return total
 
-def respond_with_delivery_info(address: str) -> None:
+def respond_with_delivery_info(address: str, order_total: int) -> None:
     """Сообщает стоимость доставки и ближайшую точку самовывоза."""
-    order_sum = summarize_order()
-    delivery_msg = get_delivery_price(address, order_sum)
+    delivery_msg = get_delivery_price(address, order_total)
     print("Бот:", delivery_msg)
     coords = geocode_address_2gis(address)
     if coords:
@@ -237,12 +251,27 @@ while True:
 
     if awaiting_address:
         user_address = q
-        respond_with_delivery_info(user_address)
+        total = summarize_order()
+        respond_with_delivery_info(user_address, total)
         awaiting_address = False
+        continue
+
+    if awaiting_quantity:
+        if q.isdigit():
+            qty = int(q)
+            order.append({"name": pending_product["name"], "price": pending_product["price"], "quantity": qty})
+            print(f"Бот: Добавлено {pending_product['name']} x{qty} в заказ.")
+            pending_product = None
+            awaiting_quantity = False
+            print("Бот: Хотите выбрать что-то ещё? Если закончили, напишите 'самовывоз' или укажите адрес доставки.")
+            awaiting_delivery_choice = True
+        else:
+            print("Бот: Пожалуйста, укажите количество цифрой.")
         continue
 
     if awaiting_delivery_choice:
         if "самовывоз" in q.lower() or "забрать" in q.lower():
+            summarize_order()
             print(
                 "Бот: Укажите город или адрес, чтобы подсказать ближайшую точку самовывоза."
             )
@@ -251,7 +280,8 @@ while True:
             continue
         else:
             user_address = q
-            respond_with_delivery_info(user_address)
+            total = summarize_order()
+            respond_with_delivery_info(user_address, total)
             awaiting_delivery_choice = False
             continue
 
@@ -259,7 +289,8 @@ while True:
     # --- Определяем стоимость доставки, ближайшую точку по адресу или району ---
     if any(word in q.lower() for word in ["город", "адрес", "нахожусь", "я из", "район", "доставка"]):
         user_address = q
-        respond_with_delivery_info(user_address)
+        total = summarize_order()
+        respond_with_delivery_info(user_address, total)
         continue
 
     # --- Товарный выбор и остальное ---
@@ -278,10 +309,10 @@ while True:
             stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
             print("Бот:", stock_info)
             if "нет в наличии" not in stock_info.lower():
-                print(
-                    "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
-                )
-                awaiting_delivery_choice = True
+                price = get_product_price(product_row["Название"])
+                pending_product = {"name": product_row["Название"], "price": price}
+                print("Бот: Сколько штук добавить в заказ?")
+                awaiting_quantity = True
             last_product_query = selected_product.lower()
             current_selection = None
             continue
@@ -334,10 +365,10 @@ while True:
         stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
         print("Бот:", stock_info)
         if "нет в наличии" not in stock_info.lower():
-            print(
-                "Бот: Хотите забрать товар или оформить доставку? Напишите 'самовывоз' или укажите адрес доставки."
-            )
-            awaiting_delivery_choice = True
+            price = get_product_price(product_row["Название"])
+            pending_product = {"name": product_row["Название"], "price": price}
+            print("Бот: Сколько штук добавить в заказ?")
+            awaiting_quantity = True
         last_product_query = product_name
 
     else:
