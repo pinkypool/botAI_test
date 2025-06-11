@@ -198,28 +198,9 @@ def summarize_order() -> int:
     print(f"Итого: {total} ₸")
     return total
 
-def respond_with_delivery_info(address: str, order_total: int):
-    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
-    delivery_msg = get_delivery_price(address, order_total)
-    print("Бот:", delivery_msg)
-    coords = geocode_address_2gis(address)
-    if coords:
-        nearest, dist = find_nearest_pickup(coords, pickup_points)
-        print(
-            f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
-        )
-    else:
-        print(
-            "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
-        )
-
-
 def respond_with_delivery_info(address: str) -> None:
-    """Выводит стоимость доставки и ближайшую точку самовывоза."""
-    try:
-        order_sum = int(input("Введите сумму заказа (₸): "))
-    except Exception:
-        order_sum = 0
+    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
+    order_sum = summarize_order()
     delivery_msg = get_delivery_price(address, order_sum)
     print("Бот:", delivery_msg)
     coords = geocode_address_2gis(address)
@@ -240,7 +221,6 @@ logger.info("Бот запущен и готов к работе")
 current_selection = None
 last_product_query = None
 user_address = None
-order_sum = 0
 awaiting_delivery_choice = False
 awaiting_address = False
 
