@@ -1,78 +1,138 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/rag_bot.py b/rag_bot.py
-index 4efbd2f6ba415d79a0f3e76a413dcc0b97a00e63..2a106c598dd3b319e68aa8429a52c5e9d9cecc2b 100644
+index 2a106c598dd3b319e68aa8429a52c5e9d9cecc2b..32ce0528f1b188b04a6ede4de9e5b1c4d9ace149 100644
 --- a/rag_bot.py
 +++ b/rag_bot.py
-@@ -142,55 +142,59 @@ def get_delivery_price(user_text: str, order_sum: int = 0) -> str:
-             return f"Стоимость доставки по району '{zone.title()}': {price} ₸."
-     for city, price in city_delivery.items():
-         if city in user_text:
-             if order_sum >= FREE_DELIVERY_SUM:
-                 return f"Доставка бесплатная по городу при заказе от 10 000 ₸."
-             return f"Стоимость доставки по городу: {price} ₸."
-     return "Не удалось определить район или город. Пожалуйста, уточните адрес или район доставки!"
+@@ -204,66 +204,81 @@ def get_product_price(product_name: str) -> int:
+     for path in glob.glob("rag_knowledge_base/menu_*.txt"):
+         with open(path, encoding="utf-8") as f:
+             for line in f:
+                 if product_name.lower() in line.lower():
+                     m = price_pattern.search(line)
+                     if m:
+                         return int(m.group(1))
+     return 0
+     
+ # --- Работа с заказом ---
+ def summarize_order() -> int:
+     """Выводит все товары из корзины и возвращает общую сумму."""
+     total = 0
+     if not order:
+         print("Бот: Заказ пуст.")
+         return total
+     print("Бот: Ваш заказ 🛍:")
+     for item in order:
+         subtotal = item["price"] * item["quantity"]
+         total += subtotal
+         print(f" - {item['name']} x{item['quantity']} = {subtotal} ₸")
+     print(f"Итого: {total} ₸ 🎉")
+     return total
  
- # --- Вся твоя логика осталась прежней: товары, память, наличие ---
- def detect_stock_question(query: str) -> bool:
-     stock_patterns = [
-         r'(есть|имеется|доступн)[а-я]*\s*(ли\s*)?(в\s*наличии|на\s*склад[а-я]*)',
-         r'(где\s*взять|где\s*купить|где\s*найти|на\s*какой\s*точке|на\s*точке)',
-         r'(сколько\s*осталось|какое\s*количество)',
-         r'(можно\s*забрать|можно\s*купить|самовывоз|забрать)',
-         r'(где\s*забрать|доставка)'
-     ]
-     query = re.sub(r'[^\w\s]', '', query.lower())
-     return any(re.search(pattern, query) for pattern in stock_patterns)
+ def respond_with_delivery_info(address: str, order_total: int, available_names=None) -> None:
+-    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
++    """Сообщает стоимость доставки и точки самовывоза с учётом наличия товара."""
+     delivery_msg = get_delivery_price(address, order_total)
+     print("Бот:", delivery_msg)
++
+     coords = geocode_address_2gis(address)
+-    if coords:
+-        nearest, dist = find_nearest_pickup(coords, pickup_points, available_names)
+-        if nearest:
+-            print(
+-                f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
+-            )
+-        else:
+-            print("Бот: К сожалению, выбранный товар сейчас недоступен для самовывоза поблизости.")
+-    else:
++    if not coords:
+         print(
+             "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
+         )
++        return
++
++    available_points = []
++    for point in pickup_points:
++        if available_names and not any(name.lower() in point["name"].lower() for name in available_names):
++            continue
++        if not point.get("lat") or not point.get("lon"):
++            geo = geocode_address_2gis(point["address"])
++            if not geo:
++                continue
++            point["lat"], point["lon"] = geo
++        dist = geodesic(coords, (point["lat"], point["lon"])).kilometers
++        available_points.append((dist, point))
++
++    if not available_points:
++        print("Бот: К сожалению, выбранный товар сейчас недоступен для самовывоза поблизости.")
++        return
++
++    available_points.sort(key=lambda x: x[0])
++    print("Бот: Вот доступные точки самовывоза с этим товаром:")
++    for dist, p in available_points:
++        print(f" • {p['name']} ({p['address']}) – {dist:.1f} км 📍")
  
- def find_similar_products(query: str, product_list: list, n=3, cutoff=0.6) -> list:
-     query = re.sub(r'[^\w\s]', '', query.lower())
-     return get_close_matches(query, product_list, n=n, cutoff=cutoff)
  
- def extract_product_name(query: str) -> str:
--    stop_words = {'есть', 'ли', 'где', 'взять', 'купить', 'найти',
--                'сколько', 'осталось', 'наличие', 'на', 'точке',
--                'можно', 'забрать', 'какое', 'количество', 'в', 'самовывоз', 'доставка'}
--    words = [word for word in re.findall(r'\w+', query.lower()) if word not in stop_words]
--    return ' '.join(words)
-+    """Return the product name from the query if it explicitly appears."""
-+    q = query.lower()
-+    candidates = [name for name in all_product_names if name in q]
-+    if not candidates:
-+        return ""
-+    if len(candidates) == 1:
-+        return candidates[0]
-+    best = get_close_matches(q, candidates, n=1)
-+    return best[0] if best else candidates[0]
+ print("Консультант Hani готов к диалогу. Напишите вопрос или 'выход':")
+ logger.info("Бот запущен и готов к работе")
  
- def get_product_stock(meta_href: str, api_key: str):
-     url = f"https://api.moysklad.ru/api/remap/1.2/report/stock/bystore?filter=product={meta_href}"
-     headers = {"Authorization": f"Bearer {api_key}", "Accept-Encoding": "gzip", "Content-Type": "application/json"}
-     try:
-         response = requests.get(url, headers=headers)
-         response.raise_for_status()
-         data = response.json()
-         rows = data.get("rows", [])
-         stocks = []
-         stock_dict = {}
-         for item in rows:
-             for store in item.get("stockByStore", []):
-                 if store.get("stock", 0) > 0:
-                     store_name = store.get("name", "Неизвестный склад")
-                     qty = int(store["stock"])
-                     stock_dict[store_name] = qty
-                     stocks.append(f"• {store_name}: {qty} шт.")
-         if stocks:
-             return "🔍 **Наличие товара:**\n" + "\n".join(stocks), stock_dict
-         return "Товара нет в наличии.", {}
-     except requests.exceptions.RequestException as e:
-         logger.error(f"Ошибка запроса: {str(e)}")
-         return f"⚠️ Ошибка при проверке наличия: {str(e)}", {}
+ current_selection = None
+ last_product_query = None
+ user_address = None
+ awaiting_delivery_choice = False
+ awaiting_address = False
+ available_pickup_stores = []
  
+ clarifying_phrases = [
+     'есть в наличии', 'есть?', 'можно забрать?', 'доступен?', 'самовывоз',
+     'где забрать', 'а есть', 'есть ли в наличии', 'наличие?', 'где взять',
+     'забрать', 'на точке', 'на какой точке', 'доступен для самовывоза', 'точка',
+     'доставка', 'с доставкой'
+ ]
+ 
+ while True:
+     q = input("Вы: ").strip()
+     logger.info(f"Получен вопрос: '{q}'")
+ 
+     if awaiting_address:
+         user_address = q
 diff --git a/rag_bot.py b/rag_bot.py
-index 4efbd2f6ba415d79a0f3e76a413dcc0b97a00e63..2a106c598dd3b319e68aa8429a52c5e9d9cecc2b 100644
+index 2a106c598dd3b319e68aa8429a52c5e9d9cecc2b..32ce0528f1b188b04a6ede4de9e5b1c4d9ace149 100644
 --- a/rag_bot.py
 +++ b/rag_bot.py
-@@ -332,64 +336,64 @@ while True:
+@@ -304,51 +319,51 @@ while True:
+             awaiting_address = True
+             continue
+         elif q.lower().strip() == "доставка":
+             print("Бот: Пожалуйста, укажите адрес доставки 🏠.")
+             awaiting_delivery_choice = False
+             awaiting_address = True
+             continue
+         else:
+             user_address = q
+             total = summarize_order()
+             respond_with_delivery_info(user_address, total, available_pickup_stores)
+             awaiting_delivery_choice = False
+             continue
+ 
+ 
+     # --- Определяем стоимость доставки, ближайшую точку по адресу или району ---
+     if any(word in q.lower() for word in ["город", "адрес", "нахожусь", "я из", "район", "доставка"]):
+         user_address = q
+         total = summarize_order()
+         respond_with_delivery_info(user_address, total, available_pickup_stores)
+         continue
+ 
+     # --- Товарный выбор и остальное ---
+     if q.lower() in ["выход", "exit", "quit"]:
+         logger.info("Завершение работы по команде пользователя")
+-        print("До свидания!")
++        print("Бот: До свидания! 👋")
+         break
+ 
+     if current_selection and q.isdigit():
+         choice = int(q)
+         if 1 <= choice <= len(current_selection):
+             selected_product = current_selection[choice-1]
              product_row = products_df[products_df["Название"] == selected_product].iloc[0]
              meta_href = product_row["Meta Href"]
              logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
@@ -92,61 +152,6 @@ index 4efbd2f6ba415d79a0f3e76a413dcc0b97a00e63..2a106c598dd3b319e68aa8429a52c5e9
          else:
              print("Бот: Пожалуйста, укажите номер из предложенных вариантов.")
              continue
- 
-     if current_selection:
-         print("Бот: Пожалуйста, укажите номер товара или задайте новый вопрос.")
-         continue
- 
-     if detect_stock_question(q):
--        query_words = extract_product_name(q).split()
--        if (
--            (len(query_words) <= 2 and last_product_query)
--            or any(phrase in q.lower() for phrase in clarifying_phrases)
--        ):
--            product_query = last_product_query if last_product_query else extract_product_name(q)
-+        product_query = extract_product_name(q)
-+        if not product_query:
-+            if last_product_query and (
-+                len(q.split()) <= 2
-+                or any(phrase in q.lower() for phrase in clarifying_phrases)
-+            ):
-+                product_query = last_product_query
-+            else:
-+                print("Бот: Сначала уточните, какой товар вас интересует.")
-+                continue
-         else:
--            product_query = extract_product_name(q)
-             last_product_query = product_query
- 
-         logger.info(f"Извлечен запрос товара: '{product_query}'")
--        if not product_query:
--            print("Бот: Сначала уточните, какой товар вас интересует.")
--            continue
- 
-         similar_products = find_similar_products(product_query, all_product_names)
-         if not similar_products:
-             print("Бот: Товар не найден в ассортименте.")
-             continue
- 
-         if len(similar_products) > 1:
-             original_names = []
-             for name in similar_products:
-                 original_name = products_df[products_df["Название"].str.lower() == name].iloc[0]["Название"]
-                 original_names.append(original_name)
- 
-             print("Бот: Уточните, какой именно товар вас интересует:")
-             for i, name in enumerate(original_names, 1):
-                 print(f"{i}. {name}")
-             print("Пожалуйста, укажите номер товара.")
-             current_selection = original_names
-             continue
- 
-         product_name = similar_products[0]
-         product_row = products_df[products_df["Название"].str.lower() == product_name].iloc[0]
-         meta_href = product_row["Meta Href"]
-         logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
-         stock_info, available_stock = get_product_stock(meta_href, MOYSKLAD_API_KEY)
-         print("Бот:", stock_info)
  
 EOF
 )

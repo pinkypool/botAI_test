@@ -226,22 +226,37 @@ def summarize_order() -> int:
     return total
 
 def respond_with_delivery_info(address: str, order_total: int, available_names=None) -> None:
-    """Сообщает стоимость доставки и ближайшую точку самовывоза."""
+    """Сообщает стоимость доставки и точки самовывоза с учётом наличия товара."""
     delivery_msg = get_delivery_price(address, order_total)
     print("Бот:", delivery_msg)
+
     coords = geocode_address_2gis(address)
-    if coords:
-        nearest, dist = find_nearest_pickup(coords, pickup_points, available_names)
-        if nearest:
-            print(
-                f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
-            )
-        else:
-            print("Бот: К сожалению, выбранный товар сейчас недоступен для самовывоза поблизости.")
-    else:
+    if not coords:
         print(
             "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
         )
+        return
+
+    available_points = []
+    for point in pickup_points:
+        if available_names and not any(name.lower() in point["name"].lower() for name in available_names):
+            continue
+        if not point.get("lat") or not point.get("lon"):
+            geo = geocode_address_2gis(point["address"])
+            if not geo:
+                continue
+            point["lat"], point["lon"] = geo
+        dist = geodesic(coords, (point["lat"], point["lon"])).kilometers
+        available_points.append((dist, point))
+
+    if not available_points:
+        print("Бот: К сожалению, выбранный товар сейчас недоступен для самовывоза поблизости.")
+        return
+
+    available_points.sort(key=lambda x: x[0])
+    print("Бот: Вот доступные точки самовывоза с этим товаром:")
+    for dist, p in available_points:
+        print(f" • {p['name']} ({p['address']}) – {dist:.1f} км 📍")
 
 
 print("Консультант Hani готов к диалогу. Напишите вопрос или 'выход':")
@@ -326,7 +341,7 @@ while True:
     # --- Товарный выбор и остальное ---
     if q.lower() in ["выход", "exit", "quit"]:
         logger.info("Завершение работы по команде пользователя")
-        print("До свидания!")
+        print("Бот: До свидания! 👋")
         break
 
     if current_selection and q.isdigit():
