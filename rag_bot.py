@@ -111,10 +111,14 @@ def geocode_address_2gis(address, api_key=DGIS_API_KEY):
         return float(point["lat"]), float(point["lon"])
     return None
 
-def find_nearest_pickup(user_coords, pickup_points):
+def find_nearest_pickup(user_coords, pickup_points, available_names=None):
     best_point = None
     min_dist = float("inf")
     for point in pickup_points:
+        if available_names:
+            match = any(name.lower() in point["name"].lower() for name in available_names)
+            if not match:
+                continue
         # Авто-геокодим если нет координат
         if not point.get("lat") or not point.get("lon"):
             coords = geocode_address_2gis(point["address"])
@@ -166,7 +170,7 @@ def extract_product_name(query: str) -> str:
     words = [word for word in re.findall(r'\w+', query.lower()) if word not in stop_words]
     return ' '.join(words)
 
-def get_product_stock(meta_href: str, api_key: str) -> str:
+def get_product_stock(meta_href: str, api_key: str):
     url = f"https://api.moysklad.ru/api/remap/1.2/report/stock/bystore?filter=product={meta_href}"
     headers = {"Authorization": f"Bearer {api_key}", "Accept-Encoding": "gzip", "Content-Type": "application/json"}
     try:
@@ -175,17 +179,20 @@ def get_product_stock(meta_href: str, api_key: str) -> str:
         data = response.json()
         rows = data.get("rows", [])
         stocks = []
+        stock_dict = {}
         for item in rows:
             for store in item.get("stockByStore", []):
                 if store.get("stock", 0) > 0:
                     store_name = store.get("name", "Неизвестный склад")
-                    stocks.append(f"• {store_name}: {int(store['stock'])} шт.")
+                    qty = int(store["stock"])
+                    stock_dict[store_name] = qty
+                    stocks.append(f"• {store_name}: {qty} шт.")
         if stocks:
-            return "🔍 **Наличие товара:**\n" + "\n".join(stocks)
-        return "Товара нет в наличии."
+            return "🔍 **Наличие товара:**\n" + "\n".join(stocks), stock_dict
+        return "Товара нет в наличии.", {}
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка запроса: {str(e)}")
-        return f"⚠️ Ошибка при проверке наличия: {str(e)}"
+        return f"⚠️ Ошибка при проверке наличия: {str(e)}", {}
 
 def get_product_price(product_name: str) -> int:
     """Ищет цену товара в текстовых меню и возвращает её."""
@@ -214,16 +221,19 @@ def summarize_order() -> int:
     print(f"Итого: {total} ₸")
     return total
 
-def respond_with_delivery_info(address: str, order_total: int) -> None:
+def respond_with_delivery_info(address: str, order_total: int, available_names=None) -> None:
     """Сообщает стоимость доставки и ближайшую точку самовывоза."""
     delivery_msg = get_delivery_price(address, order_total)
     print("Бот:", delivery_msg)
     coords = geocode_address_2gis(address)
     if coords:
-        nearest, dist = find_nearest_pickup(coords, pickup_points)
-        print(
-            f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
-        )
+        nearest, dist = find_nearest_pickup(coords, pickup_points, available_names)
+        if nearest:
+            print(
+                f"Бот: Ближайшая точка для самовывоза — {nearest['name']} ({nearest['address']}). До неё {dist:.1f} км."
+            )
+        else:
+            print("Бот: К сожалению, выбранный товар сейчас недоступен для самовывоза поблизости.")
     else:
         print(
             "Бот: Не удалось определить координаты вашего адреса, попробуйте написать подробнее."
@@ -238,6 +248,7 @@ last_product_query = None
 user_address = None
 awaiting_delivery_choice = False
 awaiting_address = False
+available_pickup_stores = []
 
 clarifying_phrases = [
     'есть в наличии', 'есть?', 'можно забрать?', 'доступен?', 'самовывоз',
@@ -253,7 +264,7 @@ while True:
     if awaiting_address:
         user_address = q
         total = summarize_order()
-        respond_with_delivery_info(user_address, total)
+        respond_with_delivery_info(user_address, total, available_pickup_stores)
         awaiting_address = False
         continue
 
@@ -292,7 +303,7 @@ while True:
         else:
             user_address = q
             total = summarize_order()
-            respond_with_delivery_info(user_address, total)
+            respond_with_delivery_info(user_address, total, available_pickup_stores)
             awaiting_delivery_choice = False
             continue
 
@@ -301,7 +312,7 @@ while True:
     if any(word in q.lower() for word in ["город", "адрес", "нахожусь", "я из", "район", "доставка"]):
         user_address = q
         total = summarize_order()
-        respond_with_delivery_info(user_address, total)
+        respond_with_delivery_info(user_address, total, available_pickup_stores)
         continue
 
     # --- Товарный выбор и остальное ---
@@ -317,13 +328,16 @@ while True:
             product_row = products_df[products_df["Название"] == selected_product].iloc[0]
             meta_href = product_row["Meta Href"]
             logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
-            stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
+            stock_info, available_stock = get_product_stock(meta_href, MOYSKLAD_API_KEY)
             print("Бот:", stock_info)
-            if "нет в наличии" not in stock_info.lower():
+            if available_stock:
+                available_pickup_stores = list(available_stock.keys())
                 price = get_product_price(product_row["Название"])
                 pending_product = {"name": product_row["Название"], "price": price}
                 print("Бот: Сколько штук добавить в заказ?")
                 awaiting_quantity = True
+            else:
+                available_pickup_stores = []
             last_product_query = selected_product.lower()
             current_selection = None
             continue
@@ -373,13 +387,16 @@ while True:
         product_row = products_df[products_df["Название"].str.lower() == product_name].iloc[0]
         meta_href = product_row["Meta Href"]
         logger.info(f"Выбран товар: Meta Href={meta_href}, название='{product_row['Название']}'")
-        stock_info = get_product_stock(meta_href, MOYSKLAD_API_KEY)
+        stock_info, available_stock = get_product_stock(meta_href, MOYSKLAD_API_KEY)
         print("Бот:", stock_info)
-        if "нет в наличии" not in stock_info.lower():
+        if available_stock:
+            available_pickup_stores = list(available_stock.keys())
             price = get_product_price(product_row["Название"])
             pending_product = {"name": product_row["Название"], "price": price}
             print("Бот: Сколько штук добавить в заказ?")
             awaiting_quantity = True
+        else:
+            available_pickup_stores = []
         last_product_query = product_name
 
     else:
