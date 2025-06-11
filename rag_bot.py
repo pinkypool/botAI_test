@@ -164,11 +164,15 @@ def find_similar_products(query: str, product_list: list, n=3, cutoff=0.6) -> li
     return get_close_matches(query, product_list, n=n, cutoff=cutoff)
 
 def extract_product_name(query: str) -> str:
-    stop_words = {'есть', 'ли', 'где', 'взять', 'купить', 'найти',
-                'сколько', 'осталось', 'наличие', 'на', 'точке',
-                'можно', 'забрать', 'какое', 'количество', 'в', 'самовывоз', 'доставка'}
-    words = [word for word in re.findall(r'\w+', query.lower()) if word not in stop_words]
-    return ' '.join(words)
+    """Return the product name from the query if it explicitly appears."""
+    q = query.lower()
+    candidates = [name for name in all_product_names if name in q]
+    if not candidates:
+        return ""
+    if len(candidates) == 1:
+        return candidates[0]
+    best = get_close_matches(q, candidates, n=1)
+    return best[0] if best else candidates[0]
 
 def get_product_stock(meta_href: str, api_key: str):
     url = f"https://api.moysklad.ru/api/remap/1.2/report/stock/bystore?filter=product={meta_href}"
@@ -354,20 +358,20 @@ while True:
         continue
 
     if detect_stock_question(q):
-        query_words = extract_product_name(q).split()
-        if (
-            (len(query_words) <= 2 and last_product_query)
-            or any(phrase in q.lower() for phrase in clarifying_phrases)
-        ):
-            product_query = last_product_query if last_product_query else extract_product_name(q)
+        product_query = extract_product_name(q)
+        if not product_query:
+            if last_product_query and (
+                len(q.split()) <= 2
+                or any(phrase in q.lower() for phrase in clarifying_phrases)
+            ):
+                product_query = last_product_query
+            else:
+                print("Бот: Сначала уточните, какой товар вас интересует.")
+                continue
         else:
-            product_query = extract_product_name(q)
             last_product_query = product_query
 
         logger.info(f"Извлечен запрос товара: '{product_query}'")
-        if not product_query:
-            print("Бот: Сначала уточните, какой товар вас интересует.")
-            continue
 
         similar_products = find_similar_products(product_query, all_product_names)
         if not similar_products:
